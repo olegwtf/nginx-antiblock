@@ -139,6 +139,8 @@ int read_entity_port(struct config *cfg, char *fname) {
         }
 
         free(line);
+        line = NULL;
+        len = 0;
         if (port > 0) break;
     }
 
@@ -147,7 +149,15 @@ int read_entity_port(struct config *cfg, char *fname) {
     return port;
 }
 
-int list (struct config *cfg, struct entity *entities) {
+int entities_cmp_alphabetic(const void *a, const void *b) {
+    return strcmp( ((struct entity *)a)->name, ((struct entity *)b)->name ) ;
+}
+
+int entities_cmp_numeric(const void *a, const void *b) {
+    return ((struct entity *)a)->port - ((struct entity *)b)->port;
+}
+
+int ls (struct config *cfg, struct entity *entities) {
     DIR *dh = opendir(cfg->nginx_dir);
     if (dh == NULL) {
         perror("opendir");
@@ -160,13 +170,62 @@ int list (struct config *cfg, struct entity *entities) {
     while ( (de = readdir(dh)) != NULL ) {
         if ( strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0 ) continue;
 
-        strcpy(entities[len].name,de->d_name);
+        strcpy(entities[len].name, de->d_name);
         entities[len].port = read_entity_port(cfg, de->d_name);
         len++;
     }
 
     closedir(dh);
     return len;
+}
+
+char rm (struct config *cfg, char *fname) {
+    char *fpath = malloc( (strlen(cfg->nginx_dir) + strlen(fname) + 2) * sizeof(char) );
+    sprintf(fpath, "%s/%s", cfg->nginx_dir, fname);
+
+    char rv = remove(fpath) == -1 ? 0 : 1;
+    free(fpath);
+
+    return rv;
+}
+
+int add (struct config *cfg, char *fname) {
+    struct entity ents[255];
+    int i, len = ls(cfg, ents);
+    qsort(&ents, len, sizeof(struct entity), entities_cmp_numeric);
+    for (i = 0; i < 65535 - cfg->first_local_port; i++) {
+        if ( i == len || ents[i].port != cfg->first_local_port+i ) {
+            break;
+        }
+    }
+
+    int port = cfg->first_local_port + i;
+
+    char tpl[] = "server {\n listen %d;\n proxy_pass %s;\n}\n";
+    char *ngnx = malloc((strlen(tpl) + strlen(fname) + 5) * sizeof(char));
+    sprintf(ngnx, tpl, port, fname);
+
+    char *fpath = malloc( (strlen(cfg->nginx_dir) + strlen(fname) + 2) * sizeof(char) );
+    sprintf(fpath, "%s/%s", cfg->nginx_dir, fname);
+
+    FILE *fh = fopen(fpath, "w");
+    if (fh != NULL) {
+        fputs(ngnx, fh);
+        fclose(fh);
+    }
+    else {
+        port = 0;
+        perror("fopen");
+    }
+
+    free(ngnx);
+    free(fpath);
+
+    return port;
+}
+
+char nginx_reload(struct config *cfg) {
+    return system(cfg->nginx_reload_cmd) == 0 ? 1 : 0;
 }
 
 int main (int argc, char **argv) {
@@ -224,9 +283,10 @@ int main (int argc, char **argv) {
 
         alarm(0);
 
-        if (strcmp(cmd, "list") == 0) {
+        if (strcmp(cmd, "ls") == 0) {
             struct entity ents[255];
-            int i, len = list(&cfg, ents);
+            int i, len = ls(&cfg, ents);
+            qsort(&ents, len, sizeof(struct entity), entities_cmp_alphabetic);
 
             for ( i=0; i<len; i++ ) {
                 sprintf(cmd, "%s -> %d\n", ents[i].name, ents[i].port);
@@ -234,10 +294,36 @@ int main (int argc, char **argv) {
             }
         }
         else if ( strncmp(cmd, "add ", 4) == 0 ) {
+            int port;
 
+            if (port = add(&cfg, trim(cmd+4))) {
+                if (!nginx_reload(&cfg)) {
+                    strcpy(cmd, "ERROR: nginx not reloaded\n");
+                }
+                else {
+                    sprintf(cmd, "%d\n", port);
+                }
+            }
+            else {
+                strcpy(cmd, "ERROR: not added\n");
+            }
+
+            send(client, cmd, strlen(cmd), 0);
         }
-        else if ( strncmp(cmd, "remove ", 7) == 0 ) {
+        else if ( strncmp(cmd, "rm ", 3) == 0 ) {
+            if (rm(&cfg, trim(cmd+3))) {
+                if (!nginx_reload(&cfg)) {
+                    strcpy(cmd, "ERROR: nginx not reloaded\n");
+                }
+                else {
+                    strcpy(cmd, "SUCCESS\n");
+                }
+            }
+            else {
+                strcpy(cmd, "ERROR: not removed\n");
+            }
 
+            send(client, cmd, strlen(cmd), 0);
         }
         else {
             strcpy(cmd, "ERROR: unsupported command\n");
