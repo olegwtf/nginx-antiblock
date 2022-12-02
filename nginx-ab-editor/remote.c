@@ -1,7 +1,11 @@
 #include "nginx-ab-editor.h"
 
+int entities_cmp_by_port(const void *a, const void *b) {
+    return ((struct entity *)a)->port - ((struct entity *)b)->port;
+}
+
 void _ls_cb(struct config *cfg, struct entity *entity, char *name) {
-    char *listen_param = read_entity_listen_param(cfg, name);
+    char *listen_param = read_entity_param(cfg, name, "listen ");
     if (!listen_param) return;
     entity->port = atoi(listen_param);
     free(listen_param);

@@ -21,7 +21,7 @@ struct config {
 
 struct entity {
     char name[256];
-    char ip[16];
+    char ip[17];
     int port;
 };
 
@@ -29,10 +29,6 @@ void sig_alrm_handler (int sig) {}
 
 int entities_cmp_by_name(const void *a, const void *b) {
     return strcmp( ((struct entity *)a)->name, ((struct entity *)b)->name ) ;
-}
-
-int entities_cmp_by_port(const void *a, const void *b) {
-    return ((struct entity *)a)->port - ((struct entity *)b)->port;
 }
 
 int split (char *str, char *delimiter, char ***parts) {
@@ -135,7 +131,7 @@ struct config read_config (char *path) {
     return cfg;
 }
 
-char *read_entity_listen_param(struct config *cfg, char *fname) {
+char *read_entity_param(struct config *cfg, char *fname, char *param) {
     char *fpath = malloc( (strlen(cfg->nginx_dir) + strlen(fname) + 2) * sizeof(char) );
     sprintf(fpath, "%s/%s", cfg->nginx_dir, fname);
     FILE *fh = fopen(fpath, "r");
@@ -146,16 +142,15 @@ char *read_entity_listen_param(struct config *cfg, char *fname) {
     }
 
     char *line = NULL, *tline, *res = NULL;
-    size_t len = 0, readed;
+    size_t len = 0, readed, param_len = strlen(param);
 
     while ((readed = getline(&line, &len, fh)) != -1) {
         line[readed-1] = '\0';
         tline = trim(line);
-        if (strncmp(tline, "listen ", 7) == 0) {
+        if (strncmp(tline, param, param_len) == 0) {
             tline[strlen(tline)-1] = '\0'; // remove ";"
-            tline = trim(tline);
-            res = malloc(strlen(tline) - 7 + 1);
-            strcpy(res, tline + 7);
+            res = malloc(strlen(tline) - param_len + 1);
+            strcpy(res, trim(tline + param_len));
         }
 
         free(line);
