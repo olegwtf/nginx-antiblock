@@ -1,5 +1,5 @@
 default:
-	gcc nginx-ab-editor.c -o nginx-ab-editor
+	gcc remote.c -o nginx-ab-editor-remote
 
 debug:
-	gcc nginx-ab-editor.c -o nginx-ab-editor -ggdb
+	gcc remote.c -o nginx-ab-editor-remote -ggdb
