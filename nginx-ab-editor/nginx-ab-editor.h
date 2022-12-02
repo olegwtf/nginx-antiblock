@@ -27,6 +27,14 @@ struct entity {
 
 void sig_alrm_handler (int sig) {}
 
+int entities_cmp_by_name(const void *a, const void *b) {
+    return strcmp( ((struct entity *)a)->name, ((struct entity *)b)->name ) ;
+}
+
+int entities_cmp_by_port(const void *a, const void *b) {
+    return ((struct entity *)a)->port - ((struct entity *)b)->port;
+}
+
 int split (char *str, char *delimiter, char ***parts) {
     char *tok = strtok(str, delimiter);
     int len = 0;
@@ -61,6 +69,10 @@ char *trim (char *str) {
     return str;
 }
 
+char nginx_reload(struct config *cfg) {
+    return system(cfg->nginx_reload_cmd) == 0 ? 1 : 0;
+}
+
 struct config read_config (char *path) {
     struct config cfg;
 
@@ -91,7 +103,7 @@ struct config read_config (char *path) {
         if (strcmp(key, "nginx_dir") == 0) {
             cfg.nginx_dir = val;
         }
-        else if (strcmp(trim(key, "nginx_reload_cmd") == 0) {
+        else if (strcmp(key, "nginx_reload_cmd") == 0) {
             cfg.nginx_reload_cmd = val;
         }
         else if (strcmp(key, "first_local_port") == 0) {
@@ -142,8 +154,8 @@ char *read_entity_listen_param(struct config *cfg, char *fname) {
         if (strncmp(tline, "listen ", 7) == 0) {
             tline[strlen(tline)-1] = '\0'; // remove ";"
             tline = trim(tline);
-            res = malloc(strlen(tline) + 1);
-            strcpy(res, tline);
+            res = malloc(strlen(tline) - 7 + 1);
+            strcpy(res, tline + 7);
         }
 
         free(line);
@@ -157,7 +169,7 @@ char *read_entity_listen_param(struct config *cfg, char *fname) {
     return res;
 }
 
-int ls (struct config *cfg, struct entity *entities, void (*ls_helper)(struct config *cfg, struct entity *entity, char *name)) {
+int ls(struct config *cfg, struct entity *entities, void (*ls_cb)(struct config *cfg, struct entity *entity, char *name)) {
     DIR *dh = opendir(cfg->nginx_dir);
     if (dh == NULL) {
         perror("opendir");
@@ -171,7 +183,7 @@ int ls (struct config *cfg, struct entity *entities, void (*ls_helper)(struct co
         if ( strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0 ) continue;
 
         strcpy(entities[len].name, de->d_name);
-        ls_helper(cfg, &entities[len], de->d_name);
+        ls_cb(cfg, &entities[len], de->d_name);
         len++;
     }
 
@@ -179,7 +191,7 @@ int ls (struct config *cfg, struct entity *entities, void (*ls_helper)(struct co
     return len;
 }
 
-char rm (struct config *cfg, char *fname) {
+char rm(struct config *cfg, char *fname) {
     char *fpath = malloc( (strlen(cfg->nginx_dir) + strlen(fname) + 2) * sizeof(char) );
     sprintf(fpath, "%s/%s", cfg->nginx_dir, fname);
 
@@ -189,46 +201,36 @@ char rm (struct config *cfg, char *fname) {
     return rv;
 }
 
-char *add(struct config *cfg, char *fname) {
-    struct entity ents[255];
-    int i, len = ls(cfg, ents);
-    qsort(&ents, len, sizeof(struct entity), entities_cmp_numeric);
-    for (i = 0; i < 65535 - cfg->first_local_port; i++) {
-        if ( i == len || ents[i].port != cfg->first_local_port+i ) {
-            break;
-        }
-    }
-
-    int port = cfg->first_local_port + i;
-
-    char tpl[] = "server {\n listen %d;\n proxy_pass %s;\n}\n";
-    char *ngnx = malloc((strlen(tpl) + strlen(fname) + 5) * sizeof(char));
-    sprintf(ngnx, tpl, port, fname);
+char add(struct config *cfg, char *fname, char *listen_param, char *proxy_pass_param) {
+    char tpl[] = "server {\n listen %s;\n proxy_pass %s;\n}\n";
+    char *ngnx = malloc((strlen(tpl) + strlen(listen_param) + strlen(proxy_pass_param)) * sizeof(char));
+    sprintf(ngnx, tpl, listen_param, proxy_pass_param);
 
     char *fpath = malloc( (strlen(cfg->nginx_dir) + strlen(fname) + 2) * sizeof(char) );
     sprintf(fpath, "%s/%s", cfg->nginx_dir, fname);
 
     FILE *fh = fopen(fpath, "w");
+    char rv = 1;
     if (fh != NULL) {
         fputs(ngnx, fh);
         fclose(fh);
     }
     else {
-        port = 0;
+        rv = 0;
         perror("fopen");
     }
 
     free(ngnx);
     free(fpath);
 
-    return port;
+    return rv;
 }
 
 char *_rm_processor(struct config *cfg, char *param) {
     char *res = malloc(64);
 
     if (rm(cfg, param)) {
-        if (!nginx_reload(&cfg)) {
+        if (!nginx_reload(cfg)) {
             strcpy(res, "ERROR: nginx not reloaded\n");
         }
         else {
@@ -242,11 +244,7 @@ char *_rm_processor(struct config *cfg, char *param) {
     return res;
 }
 
-char nginx_reload(struct config *cfg) {
-    return system(cfg->nginx_reload_cmd) == 0 ? 1 : 0;
-}
-
-void process_commands(char *(*ls_processor)(struct config *), char *(*add_processor)(struct config *, const char *), char *(*rm_processor)(struct config *, const char *)) {
+int process_commands(char *(*ls_processor)(struct config *), char *(*add_processor)(struct config *, char *), char *(*rm_processor)(struct config *, char *)) {
     struct config cfg = read_config("nginx-ab-editor.cfg");
 
     int server;
@@ -305,13 +303,13 @@ void process_commands(char *(*ls_processor)(struct config *), char *(*add_proces
         char *res = NULL;
 
         if (got_cmd && strcmp(cmd, "ls") == 0) {
-            res = ls_processor();
+            res = ls_processor(&cfg);
         }
         else if ( got_cmd && strncmp(cmd, "add ", 4) == 0 ) {
-            res = add_processor(trim(cmd + 4));
+            res = add_processor(&cfg, trim(cmd + 4));
         }
         else if ( got_cmd && strncmp(cmd, "rm ", 3) == 0 ) {
-            res = rm_processor(trim(cmd + 3));
+            res = rm_processor(&cfg, trim(cmd + 3));
         }
         else {
             strcpy(cmd, "ERROR: unsupported command\n");
@@ -324,4 +322,6 @@ void process_commands(char *(*ls_processor)(struct config *), char *(*add_proces
         }
         close(client);
     }
+
+    return 0;
 }

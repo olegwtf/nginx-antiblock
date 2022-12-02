@@ -1,142 +1,65 @@
-#include "ninx-ab-editor.h"
+#include "nginx-ab-editor.h"
 
-int entities_cmp_alphabetic(const void *a, const void *b) {
-    return strcmp( ((struct entity *)a)->name, ((struct entity *)b)->name ) ;
-}
-
-int entities_cmp_numeric(const void *a, const void *b) {
-    return ((struct entity *)a)->port - ((struct entity *)b)->port;
-}
-
-void _ls_helper(struct config *cfg, struct entity *entity, char *name) {
+void _ls_cb(struct config *cfg, struct entity *entity, char *name) {
     char *listen_param = read_entity_listen_param(cfg, name);
+    if (!listen_param) return;
     entity->port = atoi(listen_param);
     free(listen_param);
 }
 
 char *_ls_processor(struct config *cfg) {
     struct entity ents[255];
-    int i, len = ls(cfg, ents, _ls_helper);
-    qsort(&ents, len, sizeof(struct entity), entities_cmp_alphabetic);
+    int i, ents_len = ls(cfg, ents, _ls_cb);
+    qsort(&ents, ents_len, sizeof(struct entity), entities_cmp_by_name);
 
-    size_t len = 0, allocated_len = 255;
+    size_t allocated_len = 255, res_len = 0;
     char *res = malloc(allocated_len);
 
-    for ( i=0; i<len; i++ ) {
+    for ( i=0; i<ents_len; i++ ) {
         int add_len = strlen(ents[i].name) + 5 + 5 + 1;
-        if ( add_len > allocated_len - len ) {
+        if ( add_len > allocated_len - res_len ) {
             allocated_len += add_len > 255 ? add_len : 255;
             res = realloc(res, allocated_len);
         }
-        sprintf(res+len, "%s -> %d\n", ents[i].name, ents[i].port);
-        len = strlen(res);
+        sprintf(res+res_len, "%s -> %d\n", ents[i].name, ents[i].port);
+        res_len = strlen(res);
     }
+
+    if (!ents_len) strcpy(res, "\n");
 
     return res;
 }
 
-int main (int argc, char **argv) {
-    struct config cfg = read_config("nginx-ab-editor.cfg");
-
-    int server;
-    if ((server = socket(PF_INET, SOCK_STREAM, 0)) == -1) {
-        perror("socket");
-        return 1;
-    }
-
-    int on = 1;
-    setsockopt(server, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-
-    struct sockaddr_in addr;
-    bzero(&addr, sizeof(addr));
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(SERVER_PORT); // convert from host byte order to network byte order
-    addr.sin_addr.s_addr = INADDR_ANY;
-
-    if(bind(server, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        perror("bind");
-        return 2;
-    }
-
-    if (listen(server, 10) != 0) {
-        perror("listen");
-        return 3;
-    }
-
-    struct sigaction act;
-    act.sa_handler = sig_alrm_handler;
-    act.sa_flags   = 0;
-    if (sigaction(SIGALRM, &act, NULL) == -1) {
-        perror("sigaction");
-        return 4;
-    }
-
-    char cmd[BUFF_LEN];
-    int client, readed, cmdlen;
-
-    while ((client = accept(server, NULL, NULL)) != -1) {
-        cmdlen = 0;
-
-        // for timeout
-        alarm(5);
-
-        while ((readed = recv(client, cmd + cmdlen, BUFF_LEN - cmdlen, 0)) > 0) {
-            cmdlen += readed;
-            if (cmd[cmdlen - 1] == '\n') {
-                cmd[cmdlen - 1] = '\0';
-                break;
-            }
+char *_add_processor(struct config *cfg, char *param) {
+    struct entity ents[255];
+    int i, len = ls(cfg, ents, _ls_cb);
+    qsort(&ents, len, sizeof(struct entity), entities_cmp_by_port);
+    for (i = 0; i < 65535 - cfg->first_local_port; i++) {
+        if ( i == len || ents[i].port != cfg->first_local_port+i ) {
+            break;
         }
+    }
 
-        alarm(0);
+    int port = cfg->first_local_port + i;
+    char *port_str = malloc(6), *rv = malloc(64);
+    sprintf(port_str, "%d", port);
 
-        if (strcmp(cmd, "ls") == 0) {
-            struct entity ents[255];
-            int i, len = ls(&cfg, ents);
-            qsort(&ents, len, sizeof(struct entity), entities_cmp_alphabetic);
-
-            for ( i=0; i<len; i++ ) {
-                sprintf(cmd, "%s -> %d\n", ents[i].name, ents[i].port);
-                if ( send(client, cmd, strlen(cmd), 0) <= 0 ) break;
-            }
-        }
-        else if ( strncmp(cmd, "add ", 4) == 0 ) {
-            int port;
-
-            if (port = add(&cfg, trim(cmd+4))) {
-                if (!nginx_reload(&cfg)) {
-                    strcpy(cmd, "ERROR: nginx not reloaded\n");
-                }
-                else {
-                    sprintf(cmd, "%d\n", port);
-                }
-            }
-            else {
-                strcpy(cmd, "ERROR: not added\n");
-            }
-
-            send(client, cmd, strlen(cmd), 0);
-        }
-        else if ( strncmp(cmd, "rm ", 3) == 0 ) {
-            if (rm(&cfg, trim(cmd+3))) {
-                if (!nginx_reload(&cfg)) {
-                    strcpy(cmd, "ERROR: nginx not reloaded\n");
-                }
-                else {
-                    strcpy(cmd, "SUCCESS\n");
-                }
-            }
-            else {
-                strcpy(cmd, "ERROR: not removed\n");
-            }
-
-            send(client, cmd, strlen(cmd), 0);
+    if (add( cfg, param, port_str, param )) {
+        if (!nginx_reload(cfg)) {
+            strcpy(rv, "ERROR: nginx not reloaded\n");
         }
         else {
-            strcpy(cmd, "ERROR: unsupported command\n");
-            send(client, cmd, strlen(cmd), 0);
+            sprintf(rv, "%d\n", port);
         }
-
-        close(client);
     }
+    else {
+        strcpy(rv, "ERROR: not added\n");
+    }
+
+    free(port_str);
+    return rv;
+}
+
+int main (int argc, char **argv) {
+    return process_commands(_ls_processor, _add_processor, _rm_processor);
 }
