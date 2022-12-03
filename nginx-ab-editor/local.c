@@ -10,10 +10,16 @@ char *get_last_ip_octet(char *ip) {
     len--;
 
     END:
-    for (i = 0; i < len; i++) {
-        free(parts[i]);
-    }
-    free(parts);
+    free_splitted_parts(parts, len);
+    return rv;
+}
+
+int get_last_ip_octet_int(char *ip) {
+    char *octet = get_last_ip_octet(ip);
+    if (!octet) return 0;
+
+    int rv = atoi(octet);
+    free(octet);
 
     return rv;
 }
@@ -61,12 +67,10 @@ void _ls_cb(struct config *cfg, struct entity *entity, char *name) {
     if (listen_param) (listen_param);
     if (proxy_pass_param) free(proxy_pass_param);
     if (proxy_pass_parts) {
-        for (i = 0; i<proxy_pass_parts_len; i++) free(proxy_pass_parts[i]);
-        free(proxy_pass_parts);
+        free_splitted_parts(proxy_pass_parts, proxy_pass_parts_len);
     }
     if (listen_parts) {
-        for (i = 0; i<listen_parts_len; i++) free(listen_parts[i]);
-        free(listen_parts);
+        free_splitted_parts(listen_parts, listen_parts_len);
     }
 }
 
@@ -94,45 +98,76 @@ char *_ls_processor(struct config *cfg) {
 }
 
 char *_add_processor(struct config *cfg, char *param) {
+    char **parts;
+    char *rv = malloc(strlen(param) + 64);
+    int parts_len = split(param, " ", &parts);
+
+    if (parts_len != 2) {
+        free_splitted_parts(parts, parts_len);
+        strcpy(rv, "ERROR: incorrect add param\n");
+        return rv;
+    }
+
+    char *name = parts[0];
+    char *proxy_pass = parts[1];
+    free(parts);
+
+    parts_len = split(name, ":", &parts);
+    if (parts_len != 2) {
+        free_splitted_parts(parts, parts_len);
+        free(name);
+        free(proxy_pass);
+        strcpy(rv, "ERROR: incorrect name param\n");
+        return rv;
+    }
+
+    char *local_port = parts[1];
+    free(parts[0]);
+    free(parts);
+
     struct entity ents[255];
     int i, len = ls(cfg, ents, _ls_cb);
     qsort(&ents, len, sizeof(struct entity), entities_cmp_by_ip);
 
+    int first_ip_octet_int = 0;
+    char *first_ip_octet = get_last_ip_octet(cfg->first_local_ip);
+    int first_ip_octet_len = 0;
+    if (first_ip_octet) {
+        first_ip_octet_len = strlen(first_ip_octet);
+        first_ip_octet_int = atoi(first_ip_octet);
+        free(first_ip_octet);
+    }
 
-
-    for (i = 0; i < 255 - cfg->first_local_ip; i++) {
-        if ( i == len || ents[i].port != cfg->first_local_port+i ) {
+    for (i = 0; i < 255 - first_ip_octet_int; i++) {
+        if ( i == len || get_last_ip_octet_int( ents[i].ip ) != first_ip_octet_int+i ) {
             break;
         }
     }
 
-    int port = cfg->first_local_port + i;
-    char *port_str = malloc(6), *rv = malloc(64);
-    sprintf(port_str, "%d", port);
+    char *ip = malloc( strlen(cfg->first_local_ip) + 9 );
+    strncpy(ip, cfg->first_local_ip, strlen(cfg->first_local_ip) - first_ip_octet_len );
+    sprintf(ip + strlen(cfg->first_local_ip) - first_ip_octet_len, "%d:%s", first_ip_octet_int+i, local_port);
 
-    if (add( cfg, param, port_str, param )) {
+    if (add( cfg, name, ip, proxy_pass )) {
         if (!nginx_reload(cfg)) {
             strcpy(rv, "ERROR: nginx not reloaded\n");
         }
         else {
-            sprintf(rv, "%d\n", port);
+            sprintf(rv, "%s\n", ip);
         }
     }
     else {
         strcpy(rv, "ERROR: not added\n");
     }
 
-    free(port_str);
+    free(ip);
+    free(name);
+    free(proxy_pass);
+    free(local_port);
+
     return rv;
 }
 
-int main (int argc, char **argv) {
+int main(int argc, char **argv) {
     return process_commands(_ls_processor, _add_processor, _rm_processor);
 }
-
-/*
- server { # labs.strava.com
-                listen 192.168.1.2:443;
-                proxy_pass 178.62.25.145:6001;
-        }
-*/

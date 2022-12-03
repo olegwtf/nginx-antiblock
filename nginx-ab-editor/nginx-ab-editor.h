@@ -25,14 +25,19 @@ struct entity {
     int port;
 };
 
-void sig_alrm_handler (int sig) {}
+void sig_alrm_handler(int sig) {}
 
 int entities_cmp_by_name(const void *a, const void *b) {
     return strcmp( ((struct entity *)a)->name, ((struct entity *)b)->name ) ;
 }
 
 int split (char *str, char *delimiter, char ***parts) {
-    char *tok = strtok(str, delimiter);
+    // strtok modifies first param
+    char *tmp_str = malloc(strlen(str) + 1);
+    strcpy(tmp_str, str);
+
+    *parts = NULL;
+    char *tok = strtok(tmp_str, delimiter);
     int len = 0;
 
     while (tok != NULL) {
@@ -43,7 +48,18 @@ int split (char *str, char *delimiter, char ***parts) {
         tok = strtok(NULL, delimiter);
     }
 
+    free(tmp_str);
+
     return len;
+}
+
+void free_splitted_parts(char **parts, int len) {
+    int i;
+    for (i = 0; i < len; i++) {
+        free(parts[i]);
+    }
+
+    free(parts);
 }
 
 char *trim (char *str) {
