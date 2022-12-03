@@ -16,6 +16,8 @@ struct config {
     char *nginx_dir;
     char *nginx_reload_cmd;
     char *first_local_ip;
+    char *dnsmasq_reload_cmd;
+    char *dnsmasq_hosts_path;
     int first_local_port;
 };
 
@@ -88,7 +90,7 @@ char nginx_reload(struct config *cfg) {
 struct config read_config (char *path) {
     struct config cfg;
 
-    cfg.nginx_dir = cfg.nginx_reload_cmd = cfg.first_local_ip = NULL;
+    cfg.nginx_dir = cfg.nginx_reload_cmd = cfg.first_local_ip = cfg.dnsmasq_hosts_path = cfg.dnsmasq_reload_cmd = NULL;
     cfg.first_local_port = 0;
 
     FILE *fh = fopen(path, "r");
@@ -124,6 +126,12 @@ struct config read_config (char *path) {
         }
         else if (strcmp(key, "first_local_ip") == 0) {
             cfg.first_local_ip = val;
+        }
+        else if (strcmp(key, "dnsmasq_reload_cmd") == 0) {
+            cfg.dnsmasq_reload_cmd = val;
+        }
+        else if (strcmp(key, "dnsmasq_hosts_path") == 0) {
+            cfg.dnsmasq_hosts_path = val;
         }
         else {
             fprintf(stderr, "unknown config option: %s\n", parts[0]);

@@ -1,5 +1,73 @@
 #include "nginx-ab-editor.h"
 
+char dnsmasq_reload(struct config *cfg) {
+    if (!cfg->dnsmasq_reload_cmd) return 0;
+    return system(cfg->dnsmasq_reload_cmd) == 0 ? 1 : 0;
+}
+
+char add_to_dnsmasq(struct config *cfg, char *ip, char *host) {
+    if (!cfg->dnsmasq_hosts_path) return 0;
+
+    FILE *fh = fopen(cfg->dnsmasq_hosts_path, "a");
+    if (fh == NULL) {
+        perror("fopen");
+        return 0;
+    }
+
+    fprintf(fh, "%s %s\n", ip, host);
+    fclose(fh);
+
+    return 1;
+}
+
+char rm_from_dnsmasq(struct config *cfg, char *ip) {
+    if (!cfg->dnsmasq_hosts_path) return 0;
+
+    FILE *fh_orig = fopen(cfg->dnsmasq_hosts_path, "r");
+    if (fh_orig == NULL) {
+        perror("fopen");
+        return 0;
+    }
+
+    char *tmp_name = malloc(strlen(cfg->dnsmasq_hosts_path) + 5), rv = 1;
+    sprintf(tmp_name, "%s.tmp", cfg->dnsmasq_hosts_path);
+
+    FILE *fh_tmp = fopen(tmp_name, "w");
+    if (fh_tmp == NULL) {
+        perror("fopen");
+        rv = 0;
+        goto END;
+    }
+
+    size_t len = 0;
+    char *line = NULL;
+    int ip_len = strlen(ip);
+
+    while (getline(&line, &len, fh_orig) != -1 ) {
+        char *tmp_line = trim(line);
+        if (strncmp(tmp_line, ip, ip_len) == 0 && strlen(tmp_line) > ip_len && isspace(tmp_line[ip_len]))
+            continue;
+
+        fputs(line, fh_tmp);
+
+        free(line);
+        line = NULL;
+        len = 0;
+    }
+
+    END:
+    if (fh_orig) fclose(fh_orig);
+    if (fh_tmp)  fclose(fh_tmp);
+
+    if (rv) {
+        if (rename(tmp_name, cfg->dnsmasq_hosts_path) == -1) rv = 0;
+    }
+
+    free(tmp_name);
+
+    return rv;
+}
+
 char *get_last_ip_octet(char *ip) {
     char **parts, *rv = NULL;
     int len = split(ip, ".", &parts), i;
@@ -121,48 +189,76 @@ char *_add_processor(struct config *cfg, char *param) {
         return rv;
     }
 
+    char *host = parts[0];
     char *local_port = parts[1];
-    free(parts[0]);
     free(parts);
 
     struct entity ents[255];
     int i, len = ls(cfg, ents, _ls_cb);
-    qsort(&ents, len, sizeof(struct entity), entities_cmp_by_ip);
 
-    int first_ip_octet_int = 0;
-    char *first_ip_octet = get_last_ip_octet(cfg->first_local_ip);
-    int first_ip_octet_len = 0;
-    if (first_ip_octet) {
-        first_ip_octet_len = strlen(first_ip_octet);
-        first_ip_octet_int = atoi(first_ip_octet);
-        free(first_ip_octet);
-    }
-
-    for (i = 0; i < 255 - first_ip_octet_int; i++) {
-        if ( i == len || get_last_ip_octet_int( ents[i].ip ) != first_ip_octet_int+i ) {
+    // should reuse ip if such domain already exists with other port
+    char *ip = malloc( strlen(cfg->first_local_ip) + 9 ), reused_ip = 0;
+    int dname_len = strlen(name) - strlen(local_port);
+    for (i = 0; i < len; i++) {
+        if (strncmp(ents[i].name, name, dname_len) == 0) {
+            sprintf(ip, "%s:%s", ents[i].ip, local_port);
+            reused_ip = 1;
             break;
         }
     }
 
-    char *ip = malloc( strlen(cfg->first_local_ip) + 9 );
-    strncpy(ip, cfg->first_local_ip, strlen(cfg->first_local_ip) - first_ip_octet_len );
-    sprintf(ip + strlen(cfg->first_local_ip) - first_ip_octet_len, "%d:%s", first_ip_octet_int+i, local_port);
+    if (!reused_ip) {
+        qsort(&ents, len, sizeof(struct entity), entities_cmp_by_ip);
 
-    if (add( cfg, name, ip, proxy_pass )) {
-        if (!nginx_reload(cfg)) {
-            strcpy(rv, "ERROR: nginx not reloaded\n");
+        int first_ip_octet_int = 0;
+        char *first_ip_octet = get_last_ip_octet(cfg->first_local_ip);
+        int first_ip_octet_len = 0;
+        if (first_ip_octet) {
+            first_ip_octet_len = strlen(first_ip_octet);
+            first_ip_octet_int = atoi(first_ip_octet);
+            free(first_ip_octet);
         }
-        else {
-            sprintf(rv, "%s\n", ip);
+
+        for (i = 0; i < 255 - first_ip_octet_int; i++) {
+            if ( i == len || get_last_ip_octet_int( ents[i].ip ) != first_ip_octet_int+i ) {
+                break;
+            }
         }
+
+        strncpy(ip, cfg->first_local_ip, strlen(cfg->first_local_ip) - first_ip_octet_len );
+        sprintf(ip + strlen(cfg->first_local_ip) - first_ip_octet_len, "%d:%s", first_ip_octet_int+i, local_port);
     }
-    else {
+
+    if (!add( cfg, name, ip, proxy_pass )) {
         strcpy(rv, "ERROR: not added\n");
+        goto END;
     }
 
+    if (!nginx_reload(cfg)) {
+        strcpy(rv, "ERROR: nginx not reloaded\n");
+        goto END;
+    }
+
+    ip[strlen(ip) - strlen(local_port) - 1] = '\0';
+
+    if (!reused_ip) {
+        if (!add_to_dnsmasq( cfg, ip, host )) {
+            strcpy(rv, "ERROR: host not added to dnsmasq\n");
+            goto END;
+        }
+
+        if (!dnsmasq_reload(cfg)) {
+            strcpy(rv, "ERROR: dnsmasq not reloaded\n");
+        }
+    }
+
+    sprintf(rv, "%s\n", ip);
+
+    END:
     free(ip);
     free(name);
     free(proxy_pass);
+    free(host);
     free(local_port);
 
     return rv;
