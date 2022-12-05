@@ -64,6 +64,24 @@ char *_add_processor(struct config *cfg, char *param) {
     return rv;
 }
 
+char *_rm_processor(struct config *cfg, char *param) {
+    char *res = malloc(64);
+
+    if (rm(cfg, param)) {
+        if (!nginx_reload(cfg)) {
+            strcpy(res, "ERROR: nginx not reloaded\n");
+        }
+        else {
+            strcpy(res, "SUCCESS\n");
+        }
+    }
+    else {
+        strcpy(res, "ERROR: not removed\n");
+    }
+
+    return res;
+}
+
 int main (int argc, char **argv) {
     return process_commands(_ls_processor, _add_processor, _rm_processor);
 }

@@ -245,24 +245,6 @@ char add(struct config *cfg, char *fname, char *listen_param, char *proxy_pass_p
     return rv;
 }
 
-char *_rm_processor(struct config *cfg, char *param) {
-    char *res = malloc(64);
-
-    if (rm(cfg, param)) {
-        if (!nginx_reload(cfg)) {
-            strcpy(res, "ERROR: nginx not reloaded\n");
-        }
-        else {
-            strcpy(res, "SUCCESS\n");
-        }
-    }
-    else {
-        strcpy(res, "ERROR: not removed\n");
-    }
-
-    return res;
-}
-
 int process_commands(char *(*ls_processor)(struct config *), char *(*add_processor)(struct config *, char *), char *(*rm_processor)(struct config *, char *)) {
     struct config cfg = read_config("nginx-ab-editor.cfg");
 

@@ -249,6 +249,7 @@ char *_add_processor(struct config *cfg, char *param) {
 
         if (!dnsmasq_reload(cfg)) {
             strcpy(rv, "ERROR: dnsmasq not reloaded\n");
+            goto END;
         }
     }
 
@@ -262,6 +263,61 @@ char *_add_processor(struct config *cfg, char *param) {
     free(local_port);
 
     return rv;
+}
+
+char *_rm_processor(struct config *cfg, char *param) {
+    struct entity ents[255];
+    int i, ents_len = ls(cfg, ents, _ls_cb);
+
+    char *idx = strchr(param, ':'), name_is_uniq = 1;
+    int cmp_len = 0;
+    if (idx != NULL) {
+        cmp_len = idx - param + 1;
+    }
+
+    for (i = 0; i< ents_len; i++) {
+        if ( strncmp(ents[i].name, param, cmp_len) == 0 ) {
+            name_is_uniq = 0;
+            break;
+        }
+    }
+
+    char *res = malloc(64);
+    char *ip = NULL;
+    if (name_is_uniq) ip = read_entity_param(cfg, param, "listen ");
+
+    if (!rm(cfg, param)) {
+        strcpy(res, "ERROR: not removed\n");
+        goto END;
+    }
+
+    if (!nginx_reload(cfg)) {
+        strcpy(res, "ERROR: nginx not reloaded\n");
+        goto END;
+    }
+
+    if (name_is_uniq) {
+        if ( (idx = strchr(ip, ':')) != NULL ) {
+            *idx = '\0';
+        }
+
+        if (!rm_from_dnsmasq(cfg, ip)) {
+            strcpy(res, "ERROR: ip not removed from dnsmasq\n");
+            goto END;
+        }
+
+        if (!dnsmasq_reload(cfg)) {
+            strcpy(res, "ERROR: dnsmasq not reloaded\n");
+            goto END;
+        }
+    }
+
+    strcpy(res, "SUCCESS\n");
+
+    END:
+    if (ip) free(ip);
+
+    return res;
 }
 
 int main(int argc, char **argv) {
