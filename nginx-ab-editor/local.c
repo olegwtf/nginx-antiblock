@@ -219,14 +219,24 @@ char *_add_processor(struct config *cfg, char *param) {
             free(first_ip_octet);
         }
 
-        for (i = 0; i < 255 - first_ip_octet_int; i++) {
-            if ( i == len || get_last_ip_octet_int( ents[i].ip ) != first_ip_octet_int+i ) {
+        int j = 0, ip_octet;
+
+        for (i = 0; j < 255 - first_ip_octet_int; i++, j++) {
+            ip_octet = get_last_ip_octet_int(ents[i].ip);
+
+            if (i > 0 && get_last_ip_octet_int(ents[i-1].ip) == ip_octet ) {
+                // skip duplicate
+                j--;
+                continue;
+            }
+
+            if ( i == len || ip_octet != first_ip_octet_int+j ) {
                 break;
             }
         }
 
         strncpy(ip, cfg->first_local_ip, strlen(cfg->first_local_ip) - first_ip_octet_len );
-        sprintf(ip + strlen(cfg->first_local_ip) - first_ip_octet_len, "%d:%s", first_ip_octet_int+i, local_port);
+        sprintf(ip + strlen(cfg->first_local_ip) - first_ip_octet_len, "%d:%s", first_ip_octet_int+j, local_port);
     }
 
     if (!add( cfg, name, ip, proxy_pass )) {
