@@ -49,6 +49,7 @@ char rm_from_dnsmasq(struct config *cfg, char *ip) {
             continue;
 
         fputs(line, fh_tmp);
+        fputs("\n", fh_tmp);
 
         free(line);
         line = NULL;
@@ -286,7 +287,7 @@ char *_rm_processor(struct config *cfg, char *param) {
     }
 
     for (i = 0; i< ents_len; i++) {
-        if ( strncmp(ents[i].name, param, cmp_len) == 0 ) {
+        if ( strcmp(ents[i].name, param) != 0 && strncmp(ents[i].name, param, cmp_len) == 0 ) {
             name_is_uniq = 0;
             break;
         }
