@@ -1,0 +1,9 @@
+[Unit]
+Description=nginx antiblocking editor
+
+[Service]
+Type=simple
+ExecStart=nginx-ab-editor-remote
+
+[Install]
+WantedBy=multi-user.target

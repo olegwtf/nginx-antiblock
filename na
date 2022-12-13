@@ -1,0 +1,139 @@
+#!/usr/bin/env perl
+
+use strict;
+use IO::Socket::INET;
+
+process_cmd(@ARGV);
+
+sub process_cmd {
+    my ( $cmd, @args ) = @_;
+
+    my $processors = {
+        ls => sub {
+            my ( $local, $remote ) = @_;
+
+            my %res;
+
+            $local->syswrite("ls\n");
+            my @list = $local->getlines();
+
+            for my $ent (@list) {
+                $ent =~ s/\s+$//;
+                my ( $host, $ip, $remote_port ) = split /\s*->\s*/, $ent;
+                $res{$host}{local_ip} = $ip;
+                $res{$host}{remote_port} = $remote_port;
+            }
+
+            $remote->syswrite("ls\n");
+            @list = $remote->getlines();
+
+            for my $ent (@list) {
+                $ent =~ s/\s+$//;
+                my ( $host, $port ) = split /\s*->\s*/, $ent;
+                $res{$host}{real_remote_port} = $port;
+            }
+
+            for my $host ( sort keys %res ) {
+                my $res = $res{$host};
+                print "$host -> ", $res->{local_ip} || 'no_local_ip', ' -> ',
+                      $res->{remote_port} == $res->{real_remote_port} ? $res->{remote_port} : "$res->{remote_port} != $res->{real_remote_port}", "\n";
+            }
+        },
+        add => sub {
+            my ( $local, $remote, $cfg, $args ) = @_;
+
+            $remote->syswrite("add $args->[0]\n");
+            my $resp = $remote->getline();
+            warn "remote - $resp" if $resp =~ /^ERROR:/;
+
+            my $remote_port = $resp;
+            $remote_port =~ s/\s+$//;
+
+            my $remote_host = (split ':', $cfg->{remote})[0];
+            $local->syswrite("add $args->[0] $remote_host:$remote_port\n");
+            $resp = $local->getline();
+            warn "local - $resp" if $resp =~ /^ERROR:/;
+
+            my $local_ip = $resp;
+            $local_ip =~ s/\s+$//;
+
+            my $host = (split ':', $args->[0])[0];
+            print "$local_ip ", $host, "\n";
+
+            if ($cfg->{add_to_hosts}) {
+                my $hosts = read_hosts($host);
+                my $hosts_path = '/etc/hosts';
+                open my $fh, '>', $hosts_path or die "open `$hosts_path': $!";
+                print $fh $hosts;
+                print $fh "\n" if $hosts !~ /\n$/;
+                print $fh "$local_ip $host\n";
+            }
+        },
+        rm => sub {
+            my ( $local, $remote, $cfg, $args ) = @_;
+
+            $remote->syswrite("rm $args->[0]\n");
+            my $resp = $remote->getline();
+            warn "remote - $resp" if $resp =~ /^ERROR:/;
+
+            $local->syswrite("rm $args->[0]\n");
+            $resp = $local->getline();
+            warn "local - $resp" if $resp =~ /^ERROR:/;
+
+            my $host = (split ':', $args->[0])[0];
+
+            if ($cfg->{add_to_hosts}) {
+                my $hosts = read_hosts($host);
+                my $hosts_path = '/etc/hosts';
+                open my $fh, '>', $hosts_path or die "open `$hosts_path': $!";
+                print $fh $hosts;
+            }
+
+            print "SUCCESS\n";
+        }
+    };
+
+    exists $processors->{$cmd} or die "incorrect cmd: $cmd";
+
+    my $cfg = read_config();
+    my $local = IO::Socket::INET->new($cfg->{local}) or die "connect `$cfg->{local}': $@";
+    my $remote = IO::Socket::INET->new($cfg->{remote}) or die "connect `$cfg->{remote}': $@";
+
+    $processors->{$cmd}->( $local, $remote, $cfg, \@args );
+}
+
+sub read_config {
+    my $cfg_path = "$ENV{HOME}/.config/nginx-antiblock.cfg";
+    open my $fh, '<', $cfg_path or die "open `$cfg_path': $!";
+
+    my %cfg;
+    while ( my $line = <$fh> ) {
+        my ($k, $v) = $line =~ /^(\S+)\s*=\s*([^\r\n]+)/ or die "incorrect config line format: $line";
+        $cfg{$k} = $v;
+    }
+
+    return \%cfg;
+}
+
+sub read_hosts {
+    my ($skip_host) = @_;
+
+    my $content = '';
+
+    my $hosts_path = '/etc/hosts';
+    open my $fh, '<', $hosts_path or die "open `$hosts_path': $!";
+    while ( my $line = <$fh> ) {
+        next if $line =~ /^\s*[^#\s]+\s+\Q$skip_host\E\s+/;
+        $content .= $line;
+    }
+
+    return $content;
+}
+
+__END__
+
+config:
+
+local = 192.168.1.1:1025
+remote = 172.22.12.45:1025
+add_to_hosts = 1
