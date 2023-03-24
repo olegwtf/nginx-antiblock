@@ -332,5 +332,6 @@ char *_rm_processor(struct config *cfg, char *param) {
 }
 
 int main(int argc, char **argv) {
+    signal(SIGPIPE, SIG_IGN);
     return process_commands(_ls_processor, _add_processor, _rm_processor);
 }
