@@ -43,7 +43,7 @@ char rm_from_dnsmasq(struct config *cfg, char *ip) {
     char *line = NULL;
     int ip_len = strlen(ip);
 
-    while (getline(&line, &len, fh_orig) != -1 ) {
+    while (getline(&line, &len, fh_orig) > 0 ) {
         char *tmp_line = trim(line);
         if (strncmp(tmp_line, ip, ip_len) == 0 && strlen(tmp_line) > ip_len && isspace(tmp_line[ip_len]))
             continue;

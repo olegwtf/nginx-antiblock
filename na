@@ -8,7 +8,7 @@ process_cmd(@ARGV);
 sub process_cmd {
     my ( $cmd, @args ) = @_;
 
-    my $processors = {
+    my $processors; $processors = {
         ls => sub {
             my ( $local, $remote ) = @_;
 
@@ -90,16 +90,45 @@ sub process_cmd {
             }
 
             print "SUCCESS\n";
+        },
+        sync => sub {
+            my ( $local, $remote, $cfg ) = @_;
+
+            $local->syswrite("ls\n");
+            my @list = $local->getlines();
+            my @hosts;
+
+            for my $ent (@list) {
+                $ent =~ s/\s+$//;
+                my ( $host ) = split /\s*->\s*/, $ent;
+
+                $local = reconnect( $cfg->{local} );
+                $local->syswrite("rm $host\n");
+
+                push @hosts, $host;
+            }
+
+            for my $host (@hosts) {
+                $local = reconnect( $cfg->{local} );
+                $remote = reconnect( $cfg->{remote} );
+
+                $processors->{add}->( $local, $remote, $cfg, [$host] );
+            }
         }
     };
 
     exists $processors->{$cmd} or die "incorrect cmd: $cmd";
 
     my $cfg = read_config();
-    my $local = IO::Socket::INET->new($cfg->{local}) or die "connect `$cfg->{local}': $@";
-    my $remote = IO::Socket::INET->new($cfg->{remote}) or die "connect `$cfg->{remote}': $@";
+    my $local = reconnect( $cfg->{local} );
+    my $remote = reconnect( $cfg->{remote} );
 
     $processors->{$cmd}->( $local, $remote, $cfg, \@args );
+}
+
+sub reconnect {
+    my $host = shift;
+    return IO::Socket::INET->new($host) or die "connect `$host': $@";
 }
 
 sub read_config {
